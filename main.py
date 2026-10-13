@@ -5,14 +5,13 @@ import os
 import sys
 import shutil
 
-# --- ПУТИ К ИНСТРУМЕНТАМ ---
-# Работает и при запуске из Python, и при запуске из собранного .exe (PyInstaller)
+# --- ПУТИ ---
 if getattr(sys, 'frozen', False):
     BASE_DIR = sys._MEIPASS
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-JAVA_EXE = "java"  # если java не в PATH — укажи полный путь к java.exe
+JAVA_EXE = "java"  # или полный путь к java.exe
 FFDEC_JAR = os.path.join(BASE_DIR, "ffdec.jar")
 SWFMILL_EXE = os.path.join(BASE_DIR, "swfmill.exe")
 
@@ -24,6 +23,7 @@ class MinimapEditorApp:
         self.root.geometry("1100x700")
 
         self.current_gfx_path = None
+        self.current_swf_path = None
         self.current_xml_path = None
         self.export_dir = None
 
@@ -33,25 +33,23 @@ class MinimapEditorApp:
         top_frame = tk.Frame(self.root, pady=10)
         top_frame.pack(fill=tk.X)
 
-        self.btn_open = tk.Button(top_frame, text="1. Открыть .gfx (swfmill -> XML)",
-                                  command=self.open_gfx, width=35, height=2)
-        self.btn_open.pack(side=tk.LEFT, padx=10)
-
-        self.btn_export = tk.Button(top_frame, text="2. Экспорт ресурсов (FFDec)",
-                                    command=self.export_resources, width=35, height=2, state=tk.DISABLED)
-        self.btn_export.pack(side=tk.LEFT, padx=10)
-
-        self.btn_import = tk.Button(top_frame, text="3. Импорт правок в .gfx",
-                                    command=self.import_resources, width=35, height=2, state=tk.DISABLED)
-        self.btn_import.pack(side=tk.LEFT, padx=10)
+        tk.Button(top_frame, text="1. Открыть .gfx",
+                  command=self.open_gfx, width=28, height=2).pack(side=tk.LEFT, padx=6)
+        tk.Button(top_frame, text="2. Сохранить XML",
+                  command=self.save_xml, width=28, height=2, state=tk.DISABLED).pack(side=tk.LEFT, padx=6)
+        self.btn_rebuild = tk.Button(top_frame, text="3. Собрать .gfx обратно",
+                                     command=self.rebuild_gfx, width=28, height=2, state=tk.DISABLED)
+        self.btn_rebuild.pack(side=tk.LEFT, padx=6)
+        self.btn_export = tk.Button(top_frame, text="Экспорт ресурсов (FFDec)",
+                                    command=self.export_resources, width=28, height=2, state=tk.DISABLED)
+        self.btn_export.pack(side=tk.LEFT, padx=6)
 
         self.text_area = scrolledtext.ScrolledText(self.root, wrap=tk.NONE, font=("Consolas", 10))
         self.text_area.pack(expand=True, fill=tk.BOTH, padx=10, pady=(0, 10))
 
         self.status_var = tk.StringVar(value="Готов. Выберите .gfx файл.")
-        status_bar = tk.Label(self.root, textvariable=self.status_var,
-                              bd=1, relief=tk.SUNKEN, anchor=tk.W)
-        status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+        tk.Label(self.root, textvariable=self.status_var,
+                 bd=1, relief=tk.SUNKEN, anchor=tk.W).pack(side=tk.BOTTOM, fill=tk.X)
 
     def check_tools(self):
         missing = []
@@ -66,16 +64,17 @@ class MinimapEditorApp:
             return False
         return True
 
-    def run_command(self, cmd):
+    def run_command(self, cmd, timeout=180):
         try:
             kwargs = {}
             if sys.platform == "win32":
                 kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
-            return subprocess.run(cmd, capture_output=True, text=True, timeout=120, **kwargs)
+            return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, **kwargs)
         except Exception as e:
             print(f"[cmd error] {e}")
             return None
 
+    # ШАГ 1: .gfx → .swf (через FFDec) → .xml (через swfmill)
     def open_gfx(self):
         if not self.check_tools():
             return
@@ -89,18 +88,37 @@ class MinimapEditorApp:
 
         self.current_gfx_path = file_path
         base_name = os.path.splitext(os.path.basename(file_path))[0]
-        self.current_xml_path = os.path.join(os.path.dirname(file_path),
-                                             f"{base_name}_decompiled.xml")
+        work_dir = os.path.dirname(file_path)
 
-        self.status_var.set(f"Распаковка {base_name}.gfx через swfmill...")
+        self.current_swf_path = os.path.join(work_dir, f"{base_name}_converted.swf")
+        self.current_xml_path = os.path.join(work_dir, f"{base_name}_decompiled.xml")
+
+        # 1.1: .gfx → .swf через FFDec
+        self.status_var.set("Шаг 1/3: FFDec конвертирует .gfx в .swf...")
         self.root.update()
 
-        result = self.run_command([SWFMILL_EXE, "swf2xml", file_path, self.current_xml_path])
+        cmd1 = [JAVA_EXE, "-jar", FFDEC_JAR,
+                "-convertSWF", file_path, self.current_swf_path]
+        r1 = self.run_command(cmd1)
 
-        if result is None or result.returncode != 0:
-            error_msg = result.stderr if result else "Не удалось запустить swfmill"
+        if r1 is None or r1.returncode != 0 or not os.path.exists(self.current_swf_path):
+            err = r1.stderr if r1 else "Не удалось запустить Java"
+            messagebox.showerror("Ошибка FFDec",
+                                 f"Не удалось конвертировать .gfx в .swf:\n{err}")
+            self.status_var.set("Ошибка конвертации.")
+            return
+
+        # 1.2: .swf → .xml через swfmill
+        self.status_var.set("Шаг 2/3: swfmill распаковывает .swf в .xml...")
+        self.root.update()
+
+        cmd2 = [SWFMILL_EXE, "swf2xml", self.current_swf_path, self.current_xml_path]
+        r2 = self.run_command(cmd2)
+
+        if r2 is None or r2.returncode != 0:
+            err = r2.stderr if r2 else "Не удалось запустить swfmill"
             messagebox.showerror("Ошибка swfmill",
-                                 f"Не удалось распаковать файл:\n{error_msg}")
+                                 f"Не удалось распаковать .swf в XML:\n{err}")
             self.status_var.set("Ошибка распаковки.")
             return
 
@@ -109,12 +127,76 @@ class MinimapEditorApp:
                 xml_content = f.read()
             self.text_area.delete(1.0, tk.END)
             self.text_area.insert(tk.END, xml_content)
-            self.status_var.set(f"XML загружен. Путь: {self.current_xml_path}")
+            self.status_var.set(f"XML загружен. Правь цвета, потом нажми 'Собрать .gfx обратно'.")
+            self.btn_rebuild.config(state=tk.NORMAL)
             self.btn_export.config(state=tk.NORMAL)
-            self.btn_import.config(state=tk.DISABLED)
         except Exception as e:
             messagebox.showerror("Ошибка", f"Не удалось прочитать XML: {e}")
 
+    # Сохранение XML на диск (чтобы swfmill его увидел)
+    def save_xml(self):
+        if not self.current_xml_path:
+            return
+        try:
+            with open(self.current_xml_path, 'w', encoding='utf-8') as f:
+                f.write(self.text_area.get(1.0, tk.END))
+            messagebox.showinfo("Сохранено", f"XML записан: {self.current_xml_path}")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось сохранить XML: {e}")
+
+    # ШАГ 3: .xml → .swf (swfmill) → .gfx (FFDec)
+    def rebuild_gfx(self):
+        if not self.current_xml_path or not self.current_swf_path:
+            return
+
+        # Сначала сохраняем XML из текстового поля
+        try:
+            with open(self.current_xml_path, 'w', encoding='utf-8') as f:
+                f.write(self.text_area.get(1.0, tk.END))
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось сохранить XML: {e}")
+            return
+
+        base_name = os.path.splitext(os.path.basename(self.current_gfx_path))[0]
+        new_swf = os.path.join(os.path.dirname(self.current_gfx_path),
+                               f"{base_name}_edited.swf")
+        new_gfx = os.path.join(os.path.dirname(self.current_gfx_path),
+                               f"{base_name}_edited.gfx")
+
+        # 3.1: XML → SWF через swfmill
+        self.status_var.set("Шаг 1/2: swfmill пакует XML в .swf...")
+        self.root.update()
+
+        cmd1 = [SWFMILL_EXE, "xml2swf", self.current_xml_path, new_swf]
+        r1 = self.run_command(cmd1)
+
+        if r1 is None or r1.returncode != 0:
+            err = r1.stderr if r1 else "Не удалось запустить swfmill"
+            messagebox.showerror("Ошибка swfmill",
+                                 f"Не удалось собрать .swf из XML:\n{err}")
+            self.status_var.set("Ошибка сборки.")
+            return
+
+        # 3.2: SWF → GFX через FFDec
+        self.status_var.set("Шаг 2/2: FFDec конвертирует .swf в .gfx...")
+        self.root.update()
+
+        cmd2 = [JAVA_EXE, "-jar", FFDEC_JAR,
+                "-convertGFX", new_swf, new_gfx]
+        r2 = self.run_command(cmd2)
+
+        if r2 is None or r2.returncode != 0 or not os.path.exists(new_gfx):
+            err = r2.stderr if r2 else "Не удалось запустить Java"
+            messagebox.showerror("Ошибка FFDec",
+                                 f"Не удалось собрать .gfx из .swf:\n{err}")
+            self.status_var.set("Ошибка сборки.")
+            return
+
+        self.status_var.set(f"Готово! Новый файл: {new_gfx}")
+        messagebox.showinfo("Готово",
+                            f"Новый .gfx сохранён как:\n{new_gfx}")
+
+    # Экспорт всех картинок из .gfx через FFDec
     def export_resources(self):
         if not self.current_gfx_path:
             return
@@ -125,56 +207,26 @@ class MinimapEditorApp:
 
         if os.path.exists(self.export_dir):
             if not messagebox.askyesno("Папка существует",
-                                       f"Папка {os.path.basename(self.export_dir)} уже существует. Очистить её?"):
+                                       f"Папка уже существует. Очистить её?"):
                 return
             shutil.rmtree(self.export_dir)
-
         os.makedirs(self.export_dir)
 
-        self.status_var.set(f"Экспорт ресурсов в {self.export_dir}...")
+        self.status_var.set("Экспорт ресурсов через FFDec...")
         self.root.update()
 
-        cmd = [JAVA_EXE, "-jar", FFDEC_JAR, "-export", self.export_dir, self.current_gfx_path]
-        result = self.run_command(cmd)
+        cmd = [JAVA_EXE, "-jar", FFDEC_JAR, "-export", self.export_dir,
+               self.current_gfx_path]
+        r = self.run_command(cmd)
 
-        if result is None or result.returncode != 0:
-            error_msg = result.stderr if result else "Не удалось запустить Java"
+        if r is None or r.returncode != 0:
+            err = r.stderr if r else "Не удалось запустить Java"
             messagebox.showerror("Ошибка FFDec",
-                                 f"Не удалось экспортировать ресурсы:\n{error_msg}")
-            self.status_var.set("Ошибка экспорта.")
+                                 f"Не удалось экспортировать ресурсы:\n{err}")
             return
 
-        self.status_var.set(f"Ресурсы экспортированы: {self.export_dir}")
         messagebox.showinfo("Экспорт завершён",
-                            f"Ресурсы извлечены в:\n{self.export_dir}\n\n"
-                            f"Отредактируй нужные PNG, затем нажми 'Импорт правок'.")
-        self.btn_import.config(state=tk.NORMAL)
-
-    def import_resources(self):
-        if not self.current_gfx_path or not self.export_dir:
-            return
-
-        base_name = os.path.splitext(os.path.basename(self.current_gfx_path))[0]
-        new_gfx_path = os.path.join(os.path.dirname(self.current_gfx_path),
-                                    f"{base_name}_edited.gfx")
-
-        self.status_var.set(f"Импорт правок из {self.export_dir}...")
-        self.root.update()
-
-        cmd = [JAVA_EXE, "-jar", FFDEC_JAR, "-importScript",
-               self.current_gfx_path, new_gfx_path, self.export_dir]
-        result = self.run_command(cmd)
-
-        if result is None or result.returncode != 0:
-            error_msg = result.stderr if result else "Не удалось запустить Java"
-            messagebox.showerror("Ошибка FFDec",
-                                 f"Не удалось импортировать правки:\n{error_msg}")
-            self.status_var.set("Ошибка импорта.")
-            return
-
-        self.status_var.set(f"Успех! Новый файл: {new_gfx_path}")
-        messagebox.showinfo("Импорт завершён",
-                            f"Новый .gfx сохранён как:\n{new_gfx_path}")
+                            f"Ресурсы извлечены в:\n{self.export_dir}")
 
 
 if __name__ == "__main__":
