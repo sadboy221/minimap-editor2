@@ -24,7 +24,7 @@ jobs:
       - name: Build with PyInstaller
         run: |
           pyinstaller --noconfirm --onefile --windowed `
-            --add-data "ffdec_lib.jar;." `
+            --add-data "ffdec.jar;." `
             --add-data "swfmill.exe;." `
             --collect-all tkinter `
             --hidden-import tkinter `
