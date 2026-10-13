@@ -54,7 +54,7 @@ class MinimapEditorApp:
     def check_tools(self):
         missing = []
         if not os.path.exists(FFDEC_JAR):
-            missing.append("ffdec.jar")
+            missing.append("ffdec_lib.jar")
         if not os.path.exists(SWFMILL_EXE):
             missing.append("swfmill.exe")
         if missing:
