@@ -12,7 +12,7 @@ else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 JAVA_EXE = "java"  # или полный путь к java.exe
-FFDEC_JAR = os.path.join(BASE_DIR, "ffdec.jar")
+FFDEC_JAR = os.path.join(BASE_DIR, "ffdec_lib.jar")
 SWFMILL_EXE = os.path.join(BASE_DIR, "swfmill.exe")
 
 
