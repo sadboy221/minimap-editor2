@@ -1,1 +1,9 @@
-pyinstaller
+pyinstaller --noconfirm --onefile --windowed ^
+  --add-data "ffdec.jar;." ^
+  --add-data "swfmill.exe;." ^
+  --collect-all tkinter ^
+  --hidden-import tkinter ^
+  --hidden-import tkinter.filedialog ^
+  --hidden-import tkinter.messagebox ^
+  --hidden-import tkinter.scrolledtext ^
+  main.py
